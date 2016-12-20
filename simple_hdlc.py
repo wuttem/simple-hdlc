@@ -6,13 +6,15 @@ __version__ = '0.1'
 import logging
 import struct
 import time
+from threading import Thread
 from PyCRC.CRCCCITT import CRCCCITT
 
 
+logger = logging.getLogger(__name__)
+
+
 def calcCRC(data):
-    logging.error(data)
     crc = CRCCCITT("FFFF").calculate(bytes(data))
-    logging.error(crc)
     b = bytearray(struct.pack("<H", crc))
     return b
 
@@ -26,6 +28,7 @@ class Frame(object):
         self.state = self.STATE_READ
         self.data = bytearray()
         self.crc = bytearray()
+        self.reader = None
 
     def __len__(self):
         return len(self.data)
@@ -46,9 +49,11 @@ class Frame(object):
         self.finished = True
 
     def checkCRC(self):
-        logging.error("check crc %s - %s", self.crc, calcCRC(self.data))
         res = bool(self.crc == calcCRC(self.data))
         if not res:
+            c1 = str(self.crc)
+            c2 = str(calcCRC(self.data))
+            logger.warning("invalid crc %s != %s", c1.encode("hex"), c2.encode("hex"))
             self.error = True
         return res
 
@@ -60,6 +65,10 @@ class HDLC(object):
     def __init__(self, serial):
         self.serial = serial
         self.current_frame = None
+        self.last_frame = None
+        self.frame_callback = None
+        self.error_callback = None
+        self.running = False
 
     @classmethod
     def toBytes(cls, data):
@@ -68,6 +77,50 @@ class HDLC(object):
     def sendFrame(self, data):
         bs = self._encode(self.toBytes(data))
         self.serial.write(bs)
+
+    def _onFrame(self, frame):
+        self.last_frame = frame
+        s = self.last_frame.toString()
+        logger.warning("Received Frame: %s", s.encode("hex"))
+        if self.frame_callback is not None:
+            self.frame_callback(s)
+
+    def _onError(self, frame):
+        self.last_frame = frame
+        s = self.last_frame.toString()
+        logger.warning("Frame Error: %s", s.encode("hex"))
+        if self.error_callback is not None:
+            self.error_callback(s)
+
+    def _readByte(self, b):
+        assert 0 <= b <= 255
+        if b == 0x7E:
+            # Start or End
+            if not self.current_frame or len(self.current_frame) < 1:
+                # Start
+                self.current_frame = Frame()
+            else:
+                # End
+                self.current_frame.finish()
+                self.current_frame.checkCRC()
+        elif not self.current_frame.finished:
+            self.current_frame.addByte(b)
+        else:
+            # Ignore Bytes
+            pass
+
+        # Validate and return
+        if self.current_frame.finished and not self.current_frame.error:
+            # Success
+            self._onFrame(self.current_frame)
+            self.current_frame = None
+            return True
+        elif self.current_frame.finished:
+            # Error
+            self._onError(self.current_frame)
+            self.current_frame = None
+            return True
+        return False
 
     def readFrame(self, timeout=5):
         timer = time.time() + timeout
@@ -78,27 +131,17 @@ class HDLC(object):
                 continue
 
             new_byte = ord(self.serial.read(1))
-            if new_byte == 0x7E:
-                # Start or End
-                if not self.current_frame or len(self.current_frame) < 1:
-                    # Start
-                    self.current_frame = Frame()
-                else:
-                    self.current_frame.finish()
-                    self.current_frame.checkCRC()
-            else:
-                self.current_frame.addByte(new_byte)
+            res = self._readByte(new_byte)
 
-            # Validate and return
-            if self.current_frame.finished and not self.current_frame.error:
-                # Success
-                s = self.current_frame.toString()
-                self.current_frame = None
-                return s
-            elif self.current_frame.finished:
-                # Error
-                self.current_frame = None
-                raise ValueError("Invalid Frame (CRC FAIL)")
+            if res:
+                # Validate and return
+                if not self.last_frame.error:
+                    # Success
+                    s = self.last_frame.toString()
+                    return s
+                elif self.last_frame.finished:
+                    # Error
+                    raise ValueError("Invalid Frame (CRC FAIL)")
         raise RuntimeError("readFrame timeout")
 
     @classmethod
@@ -115,3 +158,26 @@ class HDLC(object):
         data += crc
         data.append(0x7E)
         return bytes(data)
+
+    def _receiveLoop(self):
+        while self.running:
+            i = self.serial.in_waiting
+            if i < 1:
+                time.sleep(0.001)
+            new_byte = ord(self.serial.read(1))
+            res = self._readByte(new_byte)
+
+    def startReader(self, onFrame, onError=None):
+        if self.running:
+            raise RuntimeError("reader already running")
+        self.reader = Thread(target=self._receiveLoop)
+        self.reader.setDaemon(True)
+        self.frame_callback = onFrame
+        self.error_callback = onError
+        self.running = True
+        self.reader.start()
+
+    def stopReader(self):
+        self.running = False
+        self.reader.join()
+        self.reader = None
