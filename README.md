@@ -10,7 +10,13 @@ Use with instance of In/Output with read and write methods (like pyserial).
 Blocking Read:
 
 ```python
-s = serial.Serial('/dev/tty0')
+from simple_hdlc import HDLC
+import serial 
+
+s = serial.serial_for_url('loop://', timeout=1)
+# or
+# s = serial.Serial('/dev/tty0')
+
 h = HDLC(s)
 h.sendFrame(b"hello")
 print h.readFrame()  # Blocking
@@ -19,8 +25,12 @@ print h.readFrame()  # Blocking
 Reader Thread with callback:
 
 ```python
-s = serial.Serial('/dev/tty0')
-h = HDLC(s)
+from simple_hdlc import HDLC
+import serial
+
+s = serial.serial_for_url('loop://', timeout=1)
+# or
+# s = serial.Serial('/dev/tty0')
 
 def frame_callback(data):
     print(data)
