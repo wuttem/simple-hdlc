@@ -48,8 +48,8 @@ class HDLCTests(unittest.TestCase):
         h._readByte(0x42)
         h._readByte(0x43)
         # CRC
-        h._readByte(0x08)
         h._readByte(0xF5)
+        h._readByte(0x08)
         h._readByte(0x7E)
         self.assertTrue(h.current_frame is None)
         self.assertTrue(h.last_frame is not None)

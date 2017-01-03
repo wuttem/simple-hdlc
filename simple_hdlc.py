@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # coding: utf8
 
-__version__ = '0.1'
+__version__ = '0.2'
 
 import logging
 import struct
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def calcCRC(data):
     crc = CRCCCITT("FFFF").calculate(bytes(data))
-    b = bytearray(struct.pack("<H", crc))
+    b = bytearray(struct.pack(">H", crc))
     return b
 
 class Frame(object):
@@ -76,12 +76,14 @@ class HDLC(object):
 
     def sendFrame(self, data):
         bs = self._encode(self.toBytes(data))
-        self.serial.write(bs)
+        logger.info("Sending Frame: %s", bs.encode("hex"))
+        res = self.serial.write(bs)
+        logger.info("Send %s bytes", res)
 
     def _onFrame(self, frame):
         self.last_frame = frame
         s = self.last_frame.toString()
-        logger.warning("Received Frame: %s", s.encode("hex"))
+        logger.info("Received Frame: %s", s.encode("hex"))
         if self.frame_callback is not None:
             self.frame_callback(s)
 
@@ -91,6 +93,15 @@ class HDLC(object):
         logger.warning("Frame Error: %s", s.encode("hex"))
         if self.error_callback is not None:
             self.error_callback(s)
+
+    def _readBytes(self, size):
+        while size > 0:
+            b = bytearray(self.serial.read(1))
+            if b < 1:
+                return False
+            res = self._readByte(b[0])
+            if res:
+                return True
 
     def _readByte(self, b):
         assert 0 <= b <= 255
@@ -103,6 +114,9 @@ class HDLC(object):
                 # End
                 self.current_frame.finish()
                 self.current_frame.checkCRC()
+        elif self.current_frame is None:
+            # Ignore before Start
+            return False
         elif not self.current_frame.finished:
             self.current_frame.addByte(b)
         else:
@@ -130,8 +144,7 @@ class HDLC(object):
                 time.sleep(0.0001)
                 continue
 
-            new_byte = ord(self.serial.read(1))
-            res = self._readByte(new_byte)
+            res = self._readBytes(i)
 
             if res:
                 # Validate and return
@@ -164,8 +177,8 @@ class HDLC(object):
             i = self.serial.in_waiting
             if i < 1:
                 time.sleep(0.001)
-            new_byte = ord(self.serial.read(1))
-            res = self._readByte(new_byte)
+                continue
+            res = self._readBytes(i)
 
     def startReader(self, onFrame, onError=None):
         if self.running:

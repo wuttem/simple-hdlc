@@ -29,12 +29,13 @@ from simple_hdlc import HDLC
 import serial
 
 s = serial.serial_for_url('loop://', timeout=1)
+h = HDLC(s)
 # or
 # s = serial.Serial('/dev/tty0')
 
 def frame_callback(data):
     print(data)
 
-h.startReader(onFrame=frame_callback, onError=error_callback)
+h.startReader(onFrame=frame_callback)
 h.sendFrame(b"hello")
 ```
