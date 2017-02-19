@@ -162,13 +162,13 @@ class HDLC(object):
         data = bytearray()
         data.append(0x7E)
         crc = calcCRC(bs)
+        bs = bs + crc
         for byte in bs:
             if byte == 0x7E or byte == 0x7D:
                 data.append(0x7D)
                 data.append(byte ^ 0x20)
             else:
                 data.append(byte)
-        data += crc
         data.append(0x7E)
         return bytes(data)
 
