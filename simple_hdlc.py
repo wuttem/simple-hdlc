@@ -1,11 +1,13 @@
 #!/usr/bin/python
 # coding: utf8
 
-__version__ = '0.2'
+__version__ = '0.3'
 
 import logging
 import struct
 import time
+import six
+import binascii
 from threading import Thread
 from PyCRC.CRCCCITT import CRCCCITT
 
@@ -13,10 +15,24 @@ from PyCRC.CRCCCITT import CRCCCITT
 logger = logging.getLogger(__name__)
 
 
+ESCAPE_CHAR = 0x7d
+END_CHAR = 0x7e
+ESCAPE_MASK = 0x20
+
+MAX_FRAME_LENGTH = 1024
+
+
+def bin_to_hex(b):
+    if six.PY2:
+        return b.encode("hex")
+    return b.hex()
+
+
 def calcCRC(data):
-    crc = CRCCCITT("FFFF").calculate(bytes(data))
+    crc = CRCCCITT("FFFF").calculate(six.binary_type(data))
     b = bytearray(struct.pack(">H", crc))
     return b
+
 
 class Frame(object):
     STATE_READ = 0x01
@@ -24,6 +40,7 @@ class Frame(object):
 
     def __init__(self):
         self.finished = False
+        self.error_message = None
         self.error = False
         self.state = self.STATE_READ
         self.data = bytearray()
@@ -33,42 +50,78 @@ class Frame(object):
     def __len__(self):
         return len(self.data)
 
+    def reset(self):
+        self.data = bytearray()
+        self.finished = False
+        self.error = False
+        self.state = self.STATE_READ
+
     def addByte(self, b):
-        if b == 0x7D:
-            self.state = self.STATE_ESCAPE
-        elif self.state == self.STATE_ESCAPE:
+        if b == END_CHAR:
+            logger.debug("frame start")
+            if self.state == self.STATE_ESCAPE:
+                return self.abort("invalid framing (got end in escapemode)")
+            else:
+                # maybe finished
+                if len(self.data) >= 3:
+                    return self.finish()
+            return False
+
+        if self.state == self.STATE_ESCAPE:
             self.state = self.STATE_READ
             b = b ^ 0x20
-            self.data.append(b)
-        else:
-            self.data.append(b)
+        elif (b == ESCAPE_CHAR):
+            self.state = self.STATE_ESCAPE
+            return False
+
+        self.data.append(b)
+
+        if len(self.data) > MAX_FRAME_LENGTH:
+            return self.abort("frame to big")
+        
+        return False
 
     def finish(self):
+        res = self._checkCRC()
         self.crc = self.data[-2:]
         self.data = self.data[:-2]
-        self.finished = True
+        if res:
+            self.error = False
+            self.finished = True
+            return True
+        return self.abort("Invalid Frame (CRC FAIL)")
 
-    def checkCRC(self):
-        res = bool(self.crc == calcCRC(self.data))
+    def abort(self, message):
+        self.error = True
+        self.finished = True
+        self.error_message = message
+        return True
+
+    def _checkCRC(self):
+        data_without_crc = self.data[:-2]
+        crc = self.data[-2:]
+        res = bool(crc == calcCRC(data_without_crc))
         if not res:
-            c1 = str(self.crc)
-            c2 = str(calcCRC(self.data))
-            logger.warning("invalid crc %s != %s", c1.encode("hex"), c2.encode("hex"))
-            self.error = True
+            c1 = six.binary_type(crc)
+            c2 = six.binary_type(calcCRC(data_without_crc))
+            logger.warning("invalid crc %s != %s <- our calculation", bin_to_hex(c1), bin_to_hex(c2))
         return res
 
     def toString(self):
-        return str(self.data)
+        return six.binary_type(self.data)
 
 
 class HDLC(object):
-    def __init__(self, serial):
+    def __init__(self, serial, reset=True):
         self.serial = serial
         self.current_frame = None
         self.last_frame = None
         self.frame_callback = None
         self.error_callback = None
         self.running = False
+        logger.debug("HDLC INIT: %s bytes in buffer", self.serial.in_waiting)
+        if reset:
+            self.serial.reset_input_buffer()
 
     @classmethod
     def toBytes(cls, data):
@@ -76,65 +129,50 @@ class HDLC(object):
 
     def sendFrame(self, data):
         bs = self._encode(self.toBytes(data))
-        logger.info("Sending Frame: %s", bs.encode("hex"))
+        logger.info("Sending Frame: %s", bin_to_hex(bs))
         res = self.serial.write(bs)
         logger.info("Send %s bytes", res)
 
     def _onFrame(self, frame):
         self.last_frame = frame
         s = self.last_frame.toString()
-        logger.info("Received Frame: %s", s.encode("hex"))
+        logger.info("Received Frame: %s", bin_to_hex(s))
         if self.frame_callback is not None:
             self.frame_callback(s)
 
     def _onError(self, frame):
         self.last_frame = frame
         s = self.last_frame.toString()
-        logger.warning("Frame Error: %s", s.encode("hex"))
+        logger.warning("Frame Error: %s", bin_to_hex(s))
         if self.error_callback is not None:
             self.error_callback(s)
 
     def _readBytes(self, size):
-        while size > 0:
-            b = bytearray(self.serial.read(1))
-            if b < 1:
+        cnt = 0
+        while cnt < size:
+            b = six.binary_type(self.serial.read(1))
+            if len(b) < 1:
                 return False
-            res = self._readByte(b[0])
+            cnt += len(b)
+            res = self._readByte(six.byte2int(b))
             if res:
                 return True
 
     def _readByte(self, b):
         assert 0 <= b <= 255
-        if b == 0x7E:
-            # Start or End
-            if not self.current_frame or len(self.current_frame) < 1:
-                # Start
-                self.current_frame = Frame()
-            else:
-                # End
-                self.current_frame.finish()
-                self.current_frame.checkCRC()
-        elif self.current_frame is None:
-            # Ignore before Start
-            return False
-        elif not self.current_frame.finished:
-            self.current_frame.addByte(b)
-        else:
-            # Ignore Bytes
-            pass
 
-        # Validate and return
-        if self.current_frame.finished and not self.current_frame.error:
-            # Success
-            self._onFrame(self.current_frame)
-            self.current_frame = None
-            return True
-        elif self.current_frame.finished:
-            # Error
-            self._onError(self.current_frame)
-            self.current_frame = None
-            return True
-        return False
+        if not self.current_frame:
+            self.current_frame = Frame()
+
+        res = self.current_frame.addByte(b)
+        if res:
+            if self.current_frame.error:
+                self._onError(self.current_frame)
+                self.current_frame = None
+            else:
+                self._onFrame(self.current_frame)
+                self.current_frame = None
+        return res
 
     def readFrame(self, timeout=5):
         timer = time.time() + timeout
@@ -147,14 +185,14 @@ class HDLC(object):
             res = self._readBytes(i)
 
             if res:
-                # Validate and return
-                if not self.last_frame.error:
-                    # Success
-                    s = self.last_frame.toString()
-                    return s
-                elif self.last_frame.finished:
-                    # Error
-                    raise ValueError("Invalid Frame (CRC FAIL)")
+                if self.last_frame.finished:
+                    if not self.last_frame.error:
+                        # Success
+                        s = self.last_frame.toString()
+                        return s
+                    # error
+                    raise ValueError(self.last_frame.error_message)
+                raise RuntimeError("Unexpected Framing Error")
         raise RuntimeError("readFrame timeout")
 
     @classmethod
