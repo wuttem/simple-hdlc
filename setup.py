@@ -49,6 +49,7 @@ setup(
     version=VERSION,
     description="Simple HDLC Protocol",
     long_description=readme,
+    long_description_content_type='text/markdown',
     author="Matthias Wutte",
     author_email='matthias.wutte@gmail.com',
     url='https://github.com/wuttem/simple-hdlc',

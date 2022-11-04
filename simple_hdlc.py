@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # coding: utf8
 
-__version__ = '0.4'
+__version__ = '0.4.1'
 
 import logging
 import struct
