@@ -7,11 +7,6 @@ import os
 import logging
 import re
 
-try: # for pip >= 10
-    from pip._internal.req import parse_requirements
-except ImportError: # for pip <= 9.0.3
-    from pip.req import parse_requirements
-
 try:
     from setuptools import setup
 except ImportError:
@@ -26,14 +21,14 @@ with open(os.path.join(os.path.abspath(os.path.dirname(__file__)),
     pattern = re.compile(r".*__version__ = '(.*?)'", re.S)
     VERSION = pattern.match(fdp.read()).group(1)
 
-# parse_requirements() returns generator of pip.req.InstallRequirement objects
-install_reqs = parse_requirements('requirements.txt', session=False)
-
-# reqs is a list of requirement
-reqs = [str(ir.req) for ir in install_reqs]
-
 test_requirements = [
     "pytest"
+]
+
+reqs = [
+    "pyserial",
+    "pycrc",
+    "six"
 ]
 
 
