@@ -17,7 +17,7 @@ with open('README.md') as readme_file:
 
 # parse version
 with open(os.path.join(os.path.abspath(os.path.dirname(__file__)),
-                       "simple_hdlc.py")) as fdp:
+                       "simple_hdlc", "__init__.py")) as fdp:
     pattern = re.compile(r".*__version__ = '(.*?)'", re.S)
     VERSION = pattern.match(fdp.read()).group(1)
 
@@ -56,7 +56,6 @@ setup(
     packages=[
         'simple_hdlc',
     ],
-    package_dir={'simple_hdlc': '.'},
     include_package_data=True,
     install_requires=reqs,
     zip_safe=False,
