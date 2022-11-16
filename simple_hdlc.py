@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # coding: utf8
 
-__version__ = '0.4.1'
+__version__ = '0.4.2'
 
 import logging
 import struct
@@ -10,6 +10,7 @@ import six
 import binascii
 from threading import Thread
 from PyCRC.CRCCCITT import CRCCCITT
+from PyCRC.CRC16 import CRC16
 
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,8 @@ END_CHAR = 0x7e
 ESCAPE_MASK = 0x20
 
 MAX_FRAME_LENGTH = 1024
+CRCCCIT_START = "FFFF"
+CRCCCIT_POLY = 0x8408
 
 
 def bin_to_hex(b):
@@ -28,8 +31,29 @@ def bin_to_hex(b):
     return b.hex()
 
 
+def crc16(data, poly=CRCCCIT_POLY):
+    '''
+    CRC-16-CCITT Algorithm
+    '''
+    data = bytearray(data)
+    crc = 0xFFFF
+    for b in data:
+        cur_byte = 0xFF & b
+        for _ in range(0, 8):
+            if (crc & 0x0001) ^ (cur_byte & 0x0001):
+                crc = (crc >> 1) ^ poly
+            else:
+                crc >>= 1
+            cur_byte >>= 1
+    crc = (~crc & 0xFFFF)
+    crc = (crc << 8) | ((crc >> 8) & 0xFF)
+    
+    return crc & 0xFFFF
+
+
 def calcCRC(data):
-    crc = CRCCCITT("FFFF").calculate(six.binary_type(data))
+    crccalc = CRCCCITT(CRCCCIT_START)
+    crc = crccalc.calculate(six.binary_type(data))
     b = bytearray(struct.pack(">H", crc))
     return b
 

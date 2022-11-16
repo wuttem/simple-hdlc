@@ -27,7 +27,7 @@ test_requirements = [
 
 reqs = [
     "pyserial",
-    "pycrc",
+    "pythoncrc",
     "six"
 ]
 
